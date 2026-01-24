@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Model files and cache
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+.huggingface/
+models/
+checkpoints/
+
+# Gradio
+.gradio/
+
+# Data files (keep example training data, ignore generated)
+conversation_*.json
+conversation_memory.json
+character_presets.json
+tokenized_*/
+*_lora/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables
+.env
+.env.local
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json

@@ -1,0 +1,13 @@
+torch>=2.0.0
+transformers>=4.40.0
+gradio>=4.0.0
+bitsandbytes>=0.41.0
+accelerate>=0.25.0
+peft>=0.6.0
+datasets>=2.14.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+discord.py>=2.3.0
+pydantic>=2.0.0
+
