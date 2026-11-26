@@ -33,45 +33,27 @@ ENV/
 *.swo
 *~
 
-# Model files and cache
-*.bin
-*.safetensors
-*.pt
-*.pth
-*.ckpt
-.huggingface/
-models/
-checkpoints/
-
-# Gradio
-.gradio/
-
-# Data files (keep example training data, ignore generated)
-conversation_*.json
-conversation_memory.json
-character_presets.json
-tokenized_*/
-*_lora/
-*.log
-
-# OS
+# OS & Logs
 .DS_Store
 Thumbs.db
 desktop.ini
+*.log
 
-# Environment variables
+# Environment variables & secrets
 .env
-.env.local
+.env.*
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Ignore all source code, executables, scripts, and containers
+local-rag-system/
+demo_corpus/
+docker-compose.yml
+eval_benchmark.py
+*.bat
+*.ps1
+*.sh
 
-# pytest
+# CI & tests
 .pytest_cache/
 .coverage
 htmlcov/
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+.github/workflows/

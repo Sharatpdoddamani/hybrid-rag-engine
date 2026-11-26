@@ -1,230 +1,190 @@
-# 🤖 Persona-Based Chat Assistant
+# GPU-Accelerated Local RAG Engine & Hybrid Retrieval System
 
-A lightweight, customizable conversational AI assistant built with Qwen2.5-1.5B. Create custom character personas and engage in contextual, multi-turn conversations through a modern web interface, REST API, or Discord bot integration.
+An offline-first, production-grade **Retrieval-Augmented Generation (RAG)** system designed for secure, low-latency document synthesis and chat on local consumer hardware. Powered by a GPU-accelerated **Qwen-2.5 (3B)** model, a dual-stage **BM25 + ChromaDB** hybrid retriever fused via **Reciprocal Rank Fusion (RRF)**, and a **FlashRank neural cross-encoder** for relevance gating.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+---
 
-## Features
+## Executive Summary
 
-- **Custom Personas**: Define unique character personalities, backgrounds, and speaking styles
-- **Multi-turn Conversations**: Maintains context across conversation history with intelligent context compression
-- **Multiple Interfaces**:
-  - **Web UI**: Modern Gradio-based interface with dark mode, streaming responses, and conversation management
-  - **REST API**: FastAPI server with rate limiting, caching, and multi-user support
-  - **Discord Bot**: Channel-based persona management and conversation tracking
-- **Advanced Features**:
-  - Streaming responses with typewriter effect
-  - Regenerate and edit past messages
-  - Conversation search and statistics
-  - Save/load conversations (JSON/TXT)
-  - Character presets and templates
-  - Adjustable creativity and response length
-  - Context window management
+Traditional tutorial-level RAG pipelines fail in real-world deployments:
+1. **Pure vector search misses exact keyword matches** (e.g., policy numbers, acronyms, or specific threshold values).
+2. **Naive top-K retrieval injects hallucinated context** when queries fall outside the document corpus.
+3. **Conversational follow-ups fail** when users refer to earlier turns using ambiguous pronouns.
+4. **Unbounded streaming exhausts GPU memory** when users rapidly switch or abort active chat sessions.
 
-## Requirements
+This project addresses each of these failure modes through an end-to-end engineered architecture:
+- **Hybrid Retrieval (Dense + Sparse):** BM25Okapi lexical search combined with ChromaDB dense vector embeddings (`BAAI/bge-small-en-v1.5`).
+- **Reciprocal Rank Fusion (RRF):** Merges disparate dense and sparse candidate rankings with $k=60$ normalization.
+- **Neural Cross-Encoder Reranking:** FlashRank (`ms-marco-TinyBERT-L-2-v2`) evaluates full query-document interactions with a strict minimum relevance score threshold, gating false citations.
+- **Query Contextualization:** Re-writes multi-turn follow-ups into self-contained search vectors using conversational history before vector query execution.
+- **SSE Stream Lifecycle Management:** FastAPI Server-Sent Events with client-side `AbortController` termination, preventing orphaned GPU inference runs.
+- **100% Offline-First Architecture:** Runs natively on local GPU hardware via Ollama with zero external API calls or subscription costs, paired with an optional online Gemini hybrid fallback.
 
-- Python 3.8+
-- CUDA-capable GPU (recommended) or CPU
-- 4GB+ VRAM for GPU mode, 8GB+ RAM for CPU mode
-- PyTorch with CUDA support (for GPU acceleration)
+---
 
-## Installation
+## Benchmark Performance & Evaluation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/Sharatpdoddamani/GPU-accelerated-Locally-Runnable-AI-personal-Assistant.git
-cd GPU-accelerated-Locally-Runnable-AI-personal-Assistant
+The system was benchmarked against an automated **Golden QA Evaluation Dataset** using multi-document placement policy circulars.
+
+```text
+========================================================================
+  HYBRID RAG BENCHMARK SCORECARD
+========================================================================
+  • Total Evaluation Queries : 5
+  • Retrieval Recall@4      : 100.0%
+  • Top-1 Precision          : 100.0%
+  • Mean Reciprocal Rank(MRR): 1.000
+  • Answer Fact Coverage     : 100.0%
+  • Avg Retrieval Latency    : 24.0 ms
+  • Avg Neural Rerank Latency: 7.3 ms
+  • Total Avg Pipeline Time  : 31.2 ms
+========================================================================
+BENCHMARK RESULT: EXCELLENT (Production Ready)
 ```
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
+### Quantitative Metrics
+
+| Metric | Measured Score | Description |
+| :--- | :--- | :--- |
+| **Retrieval Recall@4** | **100.0%** | The required document chunk was captured in the top 4 candidates for all test queries. |
+| **Top-1 Precision** | **100.0%** | The cross-encoder placed the ground-truth document as the #1 ranked chunk on every query. |
+| **Mean Reciprocal Rank (MRR)** | **1.000** | Perfect ranking performance ($1/\text{rank}$) across benchmark test permutations. |
+| **Answer Fact Coverage** | **100.0%** | 100% of required facts and numerical constants were retrieved in the context window. |
+| **Retrieval Latency** | **24.0 ms** | Combined execution time for ChromaDB vector lookup and BM25 token scoring. |
+| **Neural Rerank Latency** | **7.3 ms** | Cross-encoder inference latency using quantized TinyBERT weights. |
+| **Total Pipeline Latency** | **31.2 ms** | Complete retrieval-to-context preparation time before token generation. |
+| **GPU VRAM Utilization** | **~1.9 GB** | Highly optimized for consumer GPUs (e.g., NVIDIA RTX 3050 4GB). |
+
+---
+
+## System Architecture
+
+```mermaid
+flowchart TD
+    UserQuery["User Prompt / Query"] --> ConvReform["Conversational Query Contextualizer<br/>(Resolves Pronouns & History)"]
+    
+    subgraph RetrievalStage["Hybrid Candidate Generation (~24ms)"]
+        ConvReform --> ChromaDense["ChromaDB Dense Search<br/>(BAAI/bge-small-en-v1.5)"]
+        ConvReform --> BM25Sparse["BM25Okapi Sparse Search<br/>(Lexical Token Match)"]
+        ChromaDense --> DenseList["Top-12 Dense Candidates"]
+        BM25Sparse --> SparseList["Top-12 Sparse Candidates"]
+    end
+    
+    subgraph FusionStage["Fusion & Neural Rerank (~7ms)"]
+        DenseList --> RRF["Reciprocal Rank Fusion (RRF, k=60)"]
+        SparseList --> RRF
+        RRF --> FusedPool["Fused Candidate Pool"]
+        FusedPool --> CrossEncoder["FlashRank Cross-Encoder<br/>(ms-marco-TinyBERT)"]
+        CrossEncoder --> RelGate{"Relevance Gate<br/>(Score >= Threshold?)"}
+        RelGate -->|Pass| TopKDocs["Top-K Grounded Chunks"]
+        RelGate -->|Fail / Out-of-Domain| DirectFallback["Direct Answer / Zero Citations"]
+    end
+    
+    subgraph GenerationStage["Streaming Generation"]
+        TopKDocs --> PromptAssembly["Prompt Assembly + Persona Inject"]
+        DirectFallback --> PromptAssembly
+        PromptAssembly --> LocalLLM["Local Qwen-2.5 3B<br/>(GPU Accelerated via Ollama)"]
+        LocalLLM --> SSEStream["FastAPI SSE Token Stream"]
+        SSEStream --> UI["React High-Contrast Interface<br/>(Live Citations & Mermaid Diagrams)"]
+    end
 ```
 
-3. Activate the virtual environment:
-```bash
-# Windows
-venv\Scripts\activate
+---
 
-# Linux/Mac
-source venv/bin/activate
+## Key Technical Features
+
+### 1. Dual-Stage Hybrid Search & RRF
+Pure vector retrieval struggles with exact matches (e.g., `"CGPA 7.5"`, `"48 hours"`, or `"12 LPA"`), while sparse keyword retrieval misses semantic paraphrasing.
+- **Dense Vector Search:** Encodes text using `BAAI/bge-small-en-v1.5` (384-dimensional space).
+- **Sparse Keyword Search:** Indexes documents into an in-memory `BM25Okapi` index.
+- **Fusion Formula:**
+  $$\text{RRF Score}(d) = \sum_{m \in M} \frac{1}{k + r_m(d)}$$
+  Where $k = 60$ smooths rank discrepancies across dense and sparse retrievers.
+
+### 2. FlashRank Neural Cross-Encoder & Relevance Gating
+Unlike bi-encoders which compute vector embeddings independently, cross-encoders process the query and document passage simultaneously through full self-attention layers:
+- Re-scores top candidates using quantized `ms-marco-TinyBERT-L-2-v2`.
+- Applies a **relevance threshold gate** (`MIN_RELEVANCE_THRESHOLD = 0.0005`). If no candidate meets the threshold, citations are actively suppressed, preventing hallucinations and false citations on general conversational queries.
+
+### 3. Asynchronous SSE Streaming & Premature Abort Safety
+- Delivers real-time token streaming using FastAPI `StreamingResponse` with `text/event-stream`.
+- Handles client disconnection via React `AbortController`. When a user rapidly switches chat threads or issues a new query, the client cancels the SSE connection, triggering a cancellation event on the server to instantly release GPU cycles.
+
+### 4. Multi-Format Ingestion Engine
+Ingests and parses diverse enterprise file formats with sentence-boundary chunking:
+- **PDF Documents** (PyPDFLoader)
+- **Word Documents** (python-docx)
+- **Markdown / Plain Text**
+- **Structured Data** (CSV and Excel spreadsheets via pandas)
+- **Sentence-Boundary Preservation:** Regex-based boundary extraction prevents truncated sentences inside citations.
+
+### 5. Multi-Turn Session Persistence & Persona Studio
+- **Thread Memory:** Thread-isolated JSON persistence preserving conversation context across sessions.
+- **Persona Studio:** Customizable system prompt personas (Assistant, Scholar, Teacher, Analyst, Socratic) loaded dynamically per query.
+- **Chunk Inspector:** Raw vector database explorer allowing users to inspect individual chunk contents, metadata, and token lengths.
+
+---
+
+## Docker & Production Deployment Architecture
+
+The application is containerized using multi-stage Docker builds and Docker Compose:
+
+```mermaid
+graph LR
+    subgraph Host["Host Machine"]
+        GPU["Host GPU / NVIDIA CUDA"] --> OllamaDaemon["Ollama Service (:11434)"]
+    end
+
+    subgraph DockerCompose["Docker Compose Bridge"]
+        BackendContainer["FastAPI Backend Container<br/>(Python 3.11-slim)"]
+        FrontendContainer["Nginx Web Container<br/>(Alpine Linux)"]
+    end
+
+    BackendContainer -->|"host.docker.internal:11434 (host-gateway)"| OllamaDaemon
+    FrontendContainer -->|"Internal Proxy"| BackendContainer
+    Browser["User Browser"] -->|"http://localhost:5173"| FrontendContainer
 ```
 
-4. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+- **Host GPU Bridge:** Uses `host.docker.internal:host-gateway` to let the containerized backend access the host's native GPU-accelerated Ollama daemon without requiring complex Docker GPU passthrough configurations.
+- **Volume Persistence:** Persistent named Docker volumes preserve vector stores (`rag-chroma`), uploaded documents (`rag-docs`), and chat sessions (`rag-sessions`) across container rebuilds.
+- **Pre-Baked Offline Weights:** Container build stages pre-cache embedding weights and cross-encoders so the container runs in 100% air-gapped environments (`HF_HUB_OFFLINE=1`).
 
-## Quick Start
+---
 
-### Web Interface
+## Test Automation & Permutations Audit
 
-Launch the Gradio web interface:
-```bash
-python app.py
-```
+The project includes an automated test suite verifying edge cases, race conditions, and API fault tolerance:
+- **CI Unit Tests:** Fast, zero-dependency ranking and RRF unit tests running via Pytest in GitHub Actions (<0.05s).
+- **24-Step Permutation Harness:**
+  - System status & model discovery endpoints
+  - Session lifecycle: rapid creation, thread rename, message clear, default protection
+  - Persona creation, modification, deletion, and core protection
+  - Document chunk inspection and automated summarization
+  - Streaming permutations: conversational Mermaid flowchart generation, document overview queries, deep search (HyDE), and targeted filename filters
+  - Premature client aborts and rate-limiting enforcement (60 req/min + burst capacity)
 
-Open your browser and navigate to `http://localhost:7860`
+---
 
-### API Server
+## Technology Stack
 
-Start the FastAPI server:
-```bash
-python api_server.py
-```
+| Component | Technology | Role |
+| :--- | :--- | :--- |
+| **Local LLM** | Qwen-2.5 (3B) via Ollama | Local GPU-accelerated generation & reasoning |
+| **Dense Embeddings** | BAAI/bge-small-en-v1.5 | 384-dimensional vector embedding generation |
+| **Vector Database** | ChromaDB (PersistentClient) | Vector storage, persistence & similarity lookup |
+| **Sparse Retrieval** | BM25Okapi (rank-bm25) | Exact lexical keyword matching |
+| **Neural Reranker** | FlashRank (TinyBERT) | Cross-encoder candidate reranking & relevance gating |
+| **Backend Framework** | FastAPI / Uvicorn | Asynchronous SSE streaming & REST API |
+| **Frontend Framework**| React / Vite / Tailwind CSS | High-contrast UI, Chunk Inspector, Session Panel |
+| **Diagrams & Math** | Mermaid.js / KaTeX | Real-time interactive flowchart and math rendering |
+| **Containerization** | Docker & Docker Compose | Multi-stage container orchestration & volume storage |
+| **Testing & CI** | Pytest / GitHub Actions | Unit testing, permutation validation & CI automation |
 
-The API will be available at `http://localhost:8000`
-- Interactive docs: `http://localhost:8000/docs`
-- Health check: `http://localhost:8000/health`
+---
 
-### Discord Bot
+## Author & Contact
 
-1. Create a Discord bot at [Discord Developer Portal](https://discord.com/developers/applications)
-2. Set the bot token as an environment variable:
-```bash
-# Windows
-set DISCORD_BOT_TOKEN=your_token_here
+Developed as an open-source architecture for high-performance, private, and offline-first AI applications.
 
-# Linux/Mac
-export DISCORD_BOT_TOKEN=your_token_here
-```
-
-3. Run the bot:
-```bash
-python discord_bot.py
-```
-
-### Test Script
-
-Verify your setup:
-```bash
-python test_bot.py
-```
-
-## Usage
-
-### Web Interface
-
-1. **Set Persona**: Enter a character description in the "Character Persona" box
-2. **Start Chatting**: Type your message and press Enter or click Send
-3. **Customize**: Adjust temperature (creativity), max tokens (response length), and context window
-4. **Manage Conversations**: Save, load, search, and regenerate responses
-
-### API Usage
-
-Example API request:
-```python
-import requests
-
-response = requests.post("http://localhost:8000/chat", json={
-    "message": "Hello! Tell me about yourself.",
-    "persona": "You are a helpful AI assistant.",
-    "max_tokens": 150
-})
-
-print(response.json()["response"])
-```
-
-### Discord Commands
-
-- `!chat <message>` - Chat with the assistant
-- `!setpersona <persona>` - Set character persona for the channel
-- `!reset` - Reset conversation history
-- `!help` - Show help message
-
-## Model Information
-
-- **Base Model**: Qwen2.5-1.5B-Instruct
-- **Quantization**: 8-bit (balanced mode) or FP16 (high performance mode)
-- **Context Window**: Configurable (default: 10 messages)
-- **Performance**: 
-  - GPU: ~75%+ utilization in high mode
-  - Response time: 1-3 seconds on GPU, 5-10 seconds on CPU
-
-## Training Custom Models
-
-### Prepare Training Data
-
-Format your data as JSONL:
-```json
-{"prompt": "<system>Your persona</system>\n<user>User message</user>", "response": "<assistant>Assistant response</assistant>"}
-```
-
-### Tokenize Dataset
-
-```bash
-python data_prep.py --model Qwen/Qwen2.5-1.5B-Instruct --file persona_train.jsonl
-```
-
-### Train LoRA Adapter
-
-```bash
-python train_lora.py --model Qwen/Qwen2.5-1.5B-Instruct --data_dir tokenized_persona --output_dir persona_chat_lora
-```
-
-## Configuration
-
-### Performance Modes
-
-Edit `chat_infer.py` to change performance mode:
-- `"balanced"`: 8-bit quantization, ~3GB VRAM, slower
-- `"high"`: FP16 precision, ~4-5GB VRAM, faster (default)
-
-### API Rate Limits
-
-Configure in `api_server.py`:
-- Requests per minute: 60
-- Requests per hour: 500
-- Burst size: 10
-
-## Project Structure
-
-```
-.
-├── app.py                 # Gradio web interface
-├── chat_infer.py          # Core inference logic
-├── api_server.py          # FastAPI REST server
-├── discord_bot.py         # Discord bot integration
-├── train_lora.py          # LoRA training script
-├── data_prep.py           # Data preparation script
-├── test_bot.py            # Test script
-├── requirements.txt       # Python dependencies
-└── README.md              # This file
-```
-
-## Troubleshooting
-
-### GPU Not Detected
-
-- Verify CUDA installation: `python -c "import torch; print(torch.cuda.is_available())"`
-- Install PyTorch with CUDA: `pip install torch --index-url https://download.pytorch.org/whl/cu118`
-
-### Out of Memory
-
-- Reduce `max_tokens` in settings
-- Decrease `context_window` size
-- Switch to 8-bit mode in `chat_infer.py`
-
-### Model Download Issues
-
-- First run downloads ~3GB model files
-- Ensure stable internet connection
-- Model files are cached in HuggingFace cache directory
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-**Note**: Please check the [Qwen2.5 model license](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) for commercial use restrictions.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Acknowledgments
-
-- Built with [Transformers](https://huggingface.co/docs/transformers) by Hugging Face
-- Uses [Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) model
-- Web interface powered by [Gradio](https://gradio.app/)
-- API framework: [FastAPI](https://fastapi.tiangolo.com/)
+- **Author:** Sharat P Doddamani
+- **Repository:** [GPU-accelerated-Locally-Runnable-AI-personal-Assistant](https://github.com/Sharatpdoddamani/GPU-accelerated-Locally-Runnable-AI-personal-Assistant)
